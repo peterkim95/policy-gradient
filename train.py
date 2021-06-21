@@ -85,7 +85,7 @@ def select_action(x):
 
 
 render = True
-batch_size = 1
+batch_size = 10
 gamma = 0.99
 
 
