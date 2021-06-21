@@ -1,3 +1,5 @@
+import sys
+
 import gym
 import numpy as np
 import torch
@@ -8,6 +10,11 @@ import torchvision.transforms as T
 
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
+
+if sys.argv[1] == 'ec2':
+    from pyvirtualdisplay import Display
+    dis = Display(visible=0, size=(1000, 1000))
+    dis.start()
 
 env = gym.make("Pong-v0")
 
@@ -145,6 +152,9 @@ while True:
             running_reward = 0.99 * running_reward + 0.01 * reward_sum
 
         print(f'episode {episode_number} finished with reward sum = {reward_sum}')
+
+        if episode_number % 100 == 0:
+            torch.save(model.state_dict(), 'vpg.pt')
 
         rewards_received, log_p_actions = [], []
         reward_sum = 0
