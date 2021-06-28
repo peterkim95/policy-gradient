@@ -36,7 +36,7 @@ transform = T.Compose([T.ToPILImage(),
 def preprocess(x):
     #     screen = env.render(mode='rgb_array') # (H,W,C) = (216,160,3)
     x = x[35:195, :] # cut out the score and border
-    return transform(x)
+    return torch.flatten(transform(x))
 
 
 class PolicyNetwork(nn.Module):
@@ -50,6 +50,9 @@ class PolicyNetwork(nn.Module):
         self.conv2 = nn.Conv2d(3, 16, kernel_size=4, stride=2)
         self.bn2 = nn.BatchNorm2d(16)
 
+        self.h = nn.Linear(6400, 200)
+        self.out = nn.Linear(200, outputs)
+
         def conv2d_size_out(size, kernel_size=5, stride=2):
             return (size - (kernel_size - 1) - 1) // stride + 1
 
@@ -59,13 +62,16 @@ class PolicyNetwork(nn.Module):
         self.head = nn.Linear(linear_input_size, outputs)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        return self.head(x.view(x.size(0), -1))
+        x = F.relu(self.h(x))
+        return self.out(x)
+        # x = F.relu(self.bn1(self.conv1(x)))
+        # x = F.relu(self.bn2(self.conv2(x)))
+        # return self.head(x.view(x.size(0), -1))
 
 
 model = PolicyNetwork(80, 80, 3)
 optimizer = optim.RMSprop(model.parameters(), lr=0.001, weight_decay=0.99)
+# optimizer = optim.Adam(model.parameters())
 
 
 def select_action(x):
@@ -74,7 +80,7 @@ def select_action(x):
     dist = Categorical(logits=output)
     # print(dist.probs)
     sampled_action = dist.sample()
-    log_p = dist.log_prob(sampled_action)
+    log_p = -dist.log_prob(sampled_action) # minus for gradient ascent!
     sampled_action = sampled_action.item()
     if sampled_action == 0:
         return NOOP, log_p
@@ -107,6 +113,8 @@ episode_number = 0
 rewards_received = []
 log_p_actions = []
 
+states, actions, rewards = [], [], []
+
 observation = env.reset()
 prev_x = preprocess(observation)
 while True:
@@ -117,12 +125,20 @@ while True:
     x = cur_x - prev_x
     prev_x = cur_x
 
-    action, log_p_action = select_action(x)
+    # action, log_p_action = select_action(x)
+    logits = model(x.unsqueeze(0))
+    sampler = Categorical(logits=logits)
+    action = sampler.sample()
 
-    log_p_actions.append(log_p_action)
 
-    observation, reward, done, info = env.step(action)
+    # log_p_actions.append(log_p_action)
+    # print(action.item()+2)
+    observation, reward, done, info = env.step(action.item()+1)
     reward_sum += reward
+
+    states.append(x)
+    actions.append(action)
+    rewards.append(reward)
 
     rewards_received.append(reward)
 
@@ -135,9 +151,21 @@ while True:
         discounted_rewards -= np.mean(discounted_rewards)
         discounted_rewards /= np.std(discounted_rewards)
 
+        discounted_rewards = torch.tensor(discounted_rewards)
 
-        loss = -(discounted_rewards * log_p_actions).sum()
+        # states = torch.cat(states).unsqueeze(1)
+        states = torch.vstack(states)
+        actions = torch.tensor(actions)
+
+        logits = model(states)
+        sampler = Categorical(logits=logits)
+        log_probs = -sampler.log_prob(actions)
+        loss = torch.sum(log_probs * discounted_rewards)
+
+        # loss = (discounted_rewards * log_p_actions).sum()
+        # optimizer.zero_grad()
         loss.backward()
+        # optimizer.step()
 
         if episode_number % batch_size == 0:
             optimizer.step()
@@ -155,6 +183,8 @@ while True:
 
         if episode_number % 100 == 0:
             torch.save(model.state_dict(), 'vpg.pt')
+
+        states, actions, rewards = [], [], []
 
         rewards_received, log_p_actions = [], []
         reward_sum = 0
